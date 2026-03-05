@@ -1,8 +1,9 @@
 [package]
 name = "bapp-api-client"
-version = "0.2.0"
+version = "0.3.0"
 edition = "2021"
 description = "BAPP Auto API Client for Rust"
+readme = "README.md"
 license = "MIT"
 homepage = "https://www.bapp.ro"
 repository = "https://github.com/bapp-open/sdk-rust"
