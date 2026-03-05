@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.1.0
+## 0.2.0
 
 - Initial release.
 - Authentication: Bearer (JWT/OAuth) and Token (API key).
