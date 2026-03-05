@@ -5,6 +5,9 @@ edition = "2021"
 description = "BAPP Auto API Client for Rust"
 license = "MIT"
 homepage = "https://www.bapp.ro"
+repository = "https://github.com/bapp-open/sdk-rust"
+keywords = ["bapp", "api", "client"]
+categories = ["api-bindings"]
 
 [dependencies]
 reqwest = { version = "0.12", features = ["json", "multipart"] }
