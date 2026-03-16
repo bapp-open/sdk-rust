@@ -297,6 +297,7 @@ impl BappApiClient {
         output: &str,
         label: Option<&str>,
         variation: Option<&str>,
+        download: bool,
     ) -> Option<String> {
         let views = Self::get_document_views(record);
         if views.is_empty() {
@@ -330,13 +331,17 @@ impl BappApiClient {
             if let Some(v) = effective_variation {
                 url.push_str(&format!("&variation={}", v));
             }
+            if download {
+                url.push_str("&download=true");
+            }
             return Some(url);
         }
 
         // Legacy view_token
-        let action = match output {
-            "pdf" => "pdf.download",
-            "context" => "pdf.context",
+        let action = match (output, download) {
+            ("pdf", true) => "pdf.download",
+            ("pdf", false) => "pdf.view",
+            ("context", _) => "pdf.context",
             _ => "pdf.preview",
         };
         Some(format!("{}/documents/{}?token={}", self.host, action, token))
@@ -352,8 +357,9 @@ impl BappApiClient {
         output: &str,
         label: Option<&str>,
         variation: Option<&str>,
+        download: bool,
     ) -> Result<Option<Vec<u8>>, Box<dyn std::error::Error>> {
-        let url = match self.get_document_url(record, output, label, variation) {
+        let url = match self.get_document_url(record, output, label, variation, download) {
             Some(u) => u,
             None => return Ok(None),
         };
