@@ -11,7 +11,7 @@ Add to `Cargo.toml`:
 
 ```toml
 [dependencies]
-bapp-api-client = "0.4.0"
+bapp-api-client = "0.4.1"
 ```
 
 ### 2. Create a client
@@ -91,6 +91,9 @@ client.app = "wms".to_string();
 | `delete(content_type, id)` | Delete an entity |
 | `list_introspect(content_type)` | Get list view metadata |
 | `detail_introspect(content_type)` | Get detail view metadata |
+| `get_document_views(record)` | Extract available views from a record |
+| `get_document_url(record, output?, label?, variation?)` | Build a render/download URL |
+| `get_document_content(record, output?, label?, variation?)` | Fetch document bytes (PDF, HTML, JPG) |
 | `list_tasks()` | List available task codes |
 | `detail_task(code)` | Get task configuration |
 | `run_task(code, payload?)` | Execute a task |
@@ -119,6 +122,41 @@ client.request_multipart(
     &[("file", "report.pdf")],    // file fields (field_name, file_path)
 ).await?;
 ```
+
+## Document Views
+
+Records may include `public_view` and/or `view_token` fields with JWT tokens
+for rendering documents (invoices, orders, reports, etc.) as HTML, PDF, or images.
+
+The SDK normalises both formats and builds the correct URL automatically:
+
+```rust
+let order = client.get("company_order.order", "42").await?.unwrap();
+
+// Get a PDF download URL (auto-detects public_view vs view_token)
+let url = client.get_document_url(&order, "pdf", None, None);
+
+// Pick a specific view by label
+let url = client.get_document_url(&order, "html", Some("Comanda interna"), None);
+
+// Use a variation
+let url = client.get_document_url(&order, "pdf", None, Some("v4"));
+
+// Fetch the actual content as bytes
+if let Some(pdf_bytes) = client.get_document_content(&order, "pdf", None, None).await? {
+    tokio::fs::write("order.pdf", &pdf_bytes).await?;
+}
+
+// Enumerate all available views
+let views = BappApiClient::get_document_views(&order);
+for v in &views {
+    println!("{} {}", v["label"], v["type"]);
+}
+```
+
+`get_document_views()` returns a list of normalised view entries with `label`,
+`token`, `type` (`"public_view"` or `"view_token"`), `variations`, and
+`default_variation`. Use it to enumerate available views (e.g. for a dropdown).
 
 ## Tasks
 

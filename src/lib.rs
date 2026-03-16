@@ -246,6 +246,122 @@ impl BappApiClient {
         self.request(Method::DELETE, &path, None, None, None).await
     }
 
+    // -- document views -----------------------------------------------------
+
+    /// Extract available document views from a record.
+    ///
+    /// Works with both `public_view` (new) and `view_token` (legacy) formats.
+    /// Returns a Vec of JSON objects with keys: `label`, `token`, `type`,
+    /// `variations`, and `default_variation`.
+    pub fn get_document_views(record: &Value) -> Vec<Value> {
+        let mut views = Vec::new();
+
+        if let Some(public_views) = record.get("public_view").and_then(|v| v.as_array()) {
+            for entry in public_views {
+                views.push(serde_json::json!({
+                    "label": entry.get("label").and_then(|v| v.as_str()).unwrap_or(""),
+                    "token": entry.get("view_token").and_then(|v| v.as_str()).unwrap_or(""),
+                    "type": "public_view",
+                    "variations": entry.get("variations").cloned().unwrap_or(Value::Null),
+                    "default_variation": entry.get("default_variation").cloned().unwrap_or(Value::Null),
+                }));
+            }
+        }
+
+        if let Some(view_tokens) = record.get("view_token").and_then(|v| v.as_array()) {
+            for entry in view_tokens {
+                views.push(serde_json::json!({
+                    "label": entry.get("label").and_then(|v| v.as_str()).unwrap_or(""),
+                    "token": entry.get("view_token").and_then(|v| v.as_str()).unwrap_or(""),
+                    "type": "view_token",
+                    "variations": null,
+                    "default_variation": null,
+                }));
+            }
+        }
+
+        views
+    }
+
+    /// Build a document render/download URL from a record.
+    ///
+    /// Works with both `public_view` and `view_token` formats.
+    /// Prefers `public_view` when both are present on a record.
+    ///
+    /// - `output`: `"html"`, `"pdf"`, `"jpg"`, or `"context"`.
+    /// - `label`: select a specific view by label (`None` = first available).
+    /// - `variation`: variation code for `public_view` entries (e.g. `"v4"`).
+    pub fn get_document_url(
+        &self,
+        record: &Value,
+        output: &str,
+        label: Option<&str>,
+        variation: Option<&str>,
+    ) -> Option<String> {
+        let views = Self::get_document_views(record);
+        if views.is_empty() {
+            return None;
+        }
+
+        let view = if let Some(label) = label {
+            views.iter()
+                .find(|v| v.get("label").and_then(|l| l.as_str()) == Some(label))
+                .unwrap_or(&views[0])
+        } else {
+            &views[0]
+        };
+
+        let token = view.get("token").and_then(|v| v.as_str()).unwrap_or("");
+        if token.is_empty() {
+            return None;
+        }
+
+        let view_type = view.get("type").and_then(|v| v.as_str()).unwrap_or("");
+
+        if view_type == "public_view" {
+            let mut url = format!("{}/render/{}?output={}", self.host, token, output);
+            let effective_variation = variation
+                .map(|s| s.to_string())
+                .or_else(|| {
+                    view.get("default_variation")
+                        .and_then(|v| v.as_str())
+                        .map(|s| s.to_string())
+                });
+            if let Some(v) = effective_variation {
+                url.push_str(&format!("&variation={}", v));
+            }
+            return Some(url);
+        }
+
+        // Legacy view_token
+        let action = match output {
+            "pdf" => "pdf.download",
+            "context" => "pdf.context",
+            _ => "pdf.preview",
+        };
+        Some(format!("{}/documents/{}?token={}", self.host, action, token))
+    }
+
+    /// Fetch document content (PDF, HTML, JPG, etc.) as bytes.
+    ///
+    /// Builds the URL via [`get_document_url`] and performs a plain GET request.
+    /// Returns `Ok(None)` when the record has no view tokens.
+    pub async fn get_document_content(
+        &self,
+        record: &Value,
+        output: &str,
+        label: Option<&str>,
+        variation: Option<&str>,
+    ) -> Result<Option<Vec<u8>>, Box<dyn std::error::Error>> {
+        let url = match self.get_document_url(record, output, label, variation) {
+            Some(u) => u,
+            None => return Ok(None),
+        };
+        let resp = self.client.get(&url).send().await?.error_for_status()?;
+        let bytes = resp.bytes().await?;
+        Ok(Some(bytes.to_vec()))
+    }
+
     // -- tasks --------------------------------------------------------------
 
     /// List all available task codes.
