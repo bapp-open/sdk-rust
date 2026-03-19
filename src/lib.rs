@@ -22,6 +22,7 @@ pub struct BappApiClient {
     pub tenant: Option<String>,
     pub app: String,
     auth_header: Option<String>,
+    user_agent: Option<String>,
     client: Client,
 }
 
@@ -33,6 +34,7 @@ impl BappApiClient {
             tenant: None,
             app: "account".to_string(),
             auth_header: None,
+            user_agent: None,
             client: Client::new(),
         }
     }
@@ -67,6 +69,12 @@ impl BappApiClient {
         self
     }
 
+    /// Set a custom User-Agent header.
+    pub fn with_user_agent(mut self, ua: &str) -> Self {
+        self.user_agent = Some(ua.to_string());
+        self
+    }
+
     fn build_request(
         &self,
         method: Method,
@@ -78,6 +86,9 @@ impl BappApiClient {
         let mut req = self.client.request(method, &url);
         if let Some(p) = params {
             req = req.query(p);
+        }
+        if let Some(ua) = &self.user_agent {
+            req = req.header("User-Agent", ua);
         }
         if let Some(auth) = &self.auth_header {
             req = req.header("Authorization", auth);

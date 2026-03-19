@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.4.2
+## 0.4.3
 
 - Initial release.
 - Authentication: Bearer (JWT/OAuth) and Token (API key).
