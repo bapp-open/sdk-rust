@@ -11,7 +11,7 @@ Add to `Cargo.toml`:
 
 ```toml
 [dependencies]
-bapp-api-client = "0.4.3"
+bapp-api-client = "0.4.4"
 ```
 
 ### 2. Create a client
