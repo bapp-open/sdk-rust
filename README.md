@@ -11,7 +11,7 @@ Add to `Cargo.toml`:
 
 ```toml
 [dependencies]
-bapp-api-client = "0.4.4"
+bapp-api-client = "0.5.0"
 ```
 
 ### 2. Create a client
@@ -76,6 +76,8 @@ client.app = "wms".to_string();
 | `host` | API base URL | `https://panel.bapp.ro/api` |
 | `tenant` | Tenant ID (`x-tenant-id` header) | `None` |
 | `app` | App slug (`x-app-slug` header) | `"account"` |
+| `timeout` | HTTP request timeout (seconds) | `30` |
+| `max_retries` | Max retries on transient errors (5xx, 429, connection) | `3` |
 
 ### Methods
 
@@ -94,6 +96,7 @@ client.app = "wms".to_string();
 | `get_document_views(record)` | Extract available views from a record |
 | `get_document_url(record, output?, label?, variation?)` | Build a render/download URL |
 | `get_document_content(record, output?, label?, variation?)` | Fetch document bytes (PDF, HTML, JPG) |
+| `download_document(record, dest, output?, label?, variation?)` | Stream document to file (memory-efficient) |
 | `list_tasks()` | List available task codes |
 | `detail_task(code)` | Get task configuration |
 | `run_task(code, payload?)` | Execute a task |

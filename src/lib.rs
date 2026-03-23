@@ -1,9 +1,12 @@
+use rand::Rng;
 use reqwest::{multipart, Client, Method, StatusCode};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::path::Path;
 use std::time::Duration;
+use url::Url;
 use tokio::fs;
+use tokio::io::AsyncWriteExt;
 use tokio::time::sleep;
 
 /// Paginated list response.
@@ -23,6 +26,7 @@ pub struct BappApiClient {
     pub app: String,
     auth_header: Option<String>,
     user_agent: Option<String>,
+    max_retries: usize,
     client: Client,
 }
 
@@ -35,7 +39,11 @@ impl BappApiClient {
             app: "account".to_string(),
             auth_header: None,
             user_agent: None,
-            client: Client::new(),
+            max_retries: 3,
+            client: Client::builder()
+                .timeout(Duration::from_secs(30))
+                .build()
+                .expect("failed to build HTTP client"),
         }
     }
 
@@ -75,6 +83,21 @@ impl BappApiClient {
         self
     }
 
+    /// Set the HTTP client timeout.
+    pub fn with_timeout(mut self, timeout: Duration) -> Self {
+        self.client = Client::builder()
+            .timeout(timeout)
+            .build()
+            .expect("failed to build HTTP client");
+        self
+    }
+
+    /// Set the maximum number of retries on transient errors.
+    pub fn with_max_retries(mut self, n: usize) -> Self {
+        self.max_retries = n;
+        self
+    }
+
     fn build_request(
         &self,
         method: Method,
@@ -105,15 +128,6 @@ impl BappApiClient {
         req
     }
 
-    async fn send(req: reqwest::RequestBuilder) -> Result<Option<Value>, reqwest::Error> {
-        let resp = req.send().await?.error_for_status()?;
-        if resp.status() == StatusCode::NO_CONTENT {
-            return Ok(None);
-        }
-        let data = resp.json::<Value>().await?;
-        Ok(Some(data))
-    }
-
     async fn request(
         &self,
         method: Method,
@@ -122,11 +136,49 @@ impl BappApiClient {
         body: Option<&Value>,
         extra_headers: Option<&[(&str, &str)]>,
     ) -> Result<Option<Value>, reqwest::Error> {
-        let mut req = self.build_request(method, path, params, extra_headers);
-        if let Some(b) = body {
-            req = req.json(b);
+        let mut rng = rand::rng();
+        let mut last_err = None;
+
+        for attempt in 0..=self.max_retries {
+            let mut req = self.build_request(method.clone(), path, params, extra_headers);
+            if let Some(b) = body {
+                req = req.json(b);
+            }
+
+            match req.send().await {
+                Ok(resp) => {
+                    let status = resp.status();
+                    if (status == StatusCode::TOO_MANY_REQUESTS || status.is_server_error())
+                        && attempt < self.max_retries
+                    {
+                        let backoff = f64::min(
+                            2f64.powi(attempt as i32) + rng.random::<f64>(),
+                            10.0,
+                        );
+                        sleep(Duration::from_secs_f64(backoff)).await;
+                        continue;
+                    }
+                    let resp = resp.error_for_status()?;
+                    if resp.status() == StatusCode::NO_CONTENT {
+                        return Ok(None);
+                    }
+                    let data = resp.json::<Value>().await?;
+                    return Ok(Some(data));
+                }
+                Err(e) => {
+                    last_err = Some(e);
+                    if attempt < self.max_retries {
+                        let backoff = f64::min(
+                            2f64.powi(attempt as i32) + rng.random::<f64>(),
+                            10.0,
+                        );
+                        sleep(Duration::from_secs_f64(backoff)).await;
+                        continue;
+                    }
+                }
+            }
         }
-        Self::send(req).await
+        Err(last_err.unwrap())
     }
 
     /// Send a multipart/form-data request. Use for file uploads.
@@ -150,7 +202,12 @@ impl BappApiClient {
             let part = multipart::Part::bytes(bytes).file_name(filename);
             form = form.part(field.to_string(), part);
         }
-        Self::send(req.multipart(form)).await
+        let resp = req.multipart(form).send().await?.error_for_status()?;
+        if resp.status() == StatusCode::NO_CONTENT {
+            return Ok(None);
+        }
+        let data = resp.json::<Value>().await?;
+        Ok(Some(data))
     }
 
     // -- user ---------------------------------------------------------------
@@ -331,7 +388,9 @@ impl BappApiClient {
         let view_type = view.get("type").and_then(|v| v.as_str()).unwrap_or("");
 
         if view_type == "public_view" {
-            let mut url = format!("{}/render/{}?output={}", self.host, token, output);
+            let base = format!("{}/render/{}", self.host, token);
+            let mut u = Url::parse(&base).ok()?;
+            u.query_pairs_mut().append_pair("output", output);
             let effective_variation = variation
                 .map(|s| s.to_string())
                 .or_else(|| {
@@ -340,12 +399,12 @@ impl BappApiClient {
                         .map(|s| s.to_string())
                 });
             if let Some(v) = effective_variation {
-                url.push_str(&format!("&variation={}", v));
+                u.query_pairs_mut().append_pair("variation", &v);
             }
             if download {
-                url.push_str("&download=true");
+                u.query_pairs_mut().append_pair("download", "true");
             }
-            return Some(url);
+            return Some(u.to_string());
         }
 
         // Legacy view_token
@@ -355,7 +414,10 @@ impl BappApiClient {
             ("context", _) => "pdf.context",
             _ => "pdf.preview",
         };
-        Some(format!("{}/documents/{}?token={}", self.host, action, token))
+        let base = format!("{}/documents/{}", self.host, action);
+        let mut u = Url::parse(&base).ok()?;
+        u.query_pairs_mut().append_pair("token", token);
+        Some(u.to_string())
     }
 
     /// Fetch document content (PDF, HTML, JPG, etc.) as bytes.
@@ -377,6 +439,30 @@ impl BappApiClient {
         let resp = self.client.get(&url).send().await?.error_for_status()?;
         let bytes = resp.bytes().await?;
         Ok(Some(bytes.to_vec()))
+    }
+
+    /// Stream document content directly to a file.
+    ///
+    /// Like [`get_document_content`] but streams to `dest` without buffering
+    /// the entire document in memory.
+    pub async fn download_document(
+        &self,
+        record: &Value,
+        dest: &str,
+        output: &str,
+        label: Option<&str>,
+        variation: Option<&str>,
+        download: bool,
+    ) -> Result<bool, Box<dyn std::error::Error>> {
+        let url = match self.get_document_url(record, output, label, variation, download) {
+            Some(u) => u,
+            None => return Ok(false),
+        };
+        let resp = self.client.get(&url).send().await?.error_for_status()?;
+        let mut file = tokio::fs::File::create(dest).await?;
+        let bytes = resp.bytes().await?;
+        file.write_all(&bytes).await?;
+        Ok(true)
     }
 
     // -- tasks --------------------------------------------------------------
